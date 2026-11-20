@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Jarvis</title>
+<style>
+  /* Layout: full-height column. Header, glowing reactor, scrolling log, quick chips, input bar. */
+  :root {
+    --bg: #020b14;
+    --panel: #06182a;
+    --line: #12405c;
+    --text: #cfefff;
+    --muted: #6f9db8;
+    --cyan: #4fd8ff;
+    --spd: 1;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: radial-gradient(ellipse at 50% 22%, #0a2d47 0%, var(--bg) 60%);
+    color: var(--text);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    display: flex;
+    flex-direction: column;
+    padding-block: max(12px, env(safe-area-inset-top, 0px)) max(12px, env(safe-area-inset-bottom, 0px));
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  h1 { margin: 0; font-size: 1rem; letter-spacing: .35em; font-weight: 600; color: var(--cyan); }
+  #status {
+    font-size: .7rem; letter-spacing: .18em; padding: 4px 10px;
+    border: 1px solid var(--line); border-radius: 999px; color: var(--cyan);
+  }
+
+  .stage { display: flex; justify-content: center; padding: 18px 0 10px; }
+  .reactor {
+    position: relative; width: min(52vw, 220px); aspect-ratio: 1; max-width: 100%;
+    border: 0; background: none; padding: 0; cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    --glow: var(--cyan);
+  }
+  .reactor:focus-visible { outline: 2px solid var(--glow); outline-offset: 8px; border-radius: 50%; }
+  .reactor[data-state="listening"] { --glow: #7dffc9; --spd: 2.2; }
+  .reactor[data-state="thinking"]  { --glow: #ffb347; --spd: 3.5; }
+  .reactor[data-state="speaking"]  { --glow: #4fd8ff; --spd: 2.6; }
+  .ring { position: absolute; border-radius: 50%; border: 2px solid var(--glow); transition: border-color .3s; }
+  .r1 { inset: 0; border-style: dashed; opacity: .45; animation: spin calc(30s / var(--spd)) linear infinite; }
+  .r2 { inset: 11%; border-width: 4px; border-color: var(--glow) transparent var(--glow) transparent;
+        animation: spin calc(9s / var(--spd)) linear infinite reverse; }
+  .r3 { inset: 25%; border-style: dotted; border-width: 3px; animation: spin calc(15s / var(--spd)) linear infinite; }
+  .core {
+    position: absolute; inset: 38%; border-radius: 50%;
+    background: radial-gradient(circle, #fff 0, var(--glow) 38%, transparent 72%);
+    box-shadow: 0 0 38px var(--glow), 0 0 90px color-mix(in srgb, var(--glow) 40%, transparent);
+    animation: pulse calc(3s / var(--spd)) ease-in-out infinite;
+    transition: background .3s, box-shadow .3s;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes pulse { 50% { transform: scale(.82); opacity: .75; } }
+  @media (prefers-reduced-motion: reduce) { .ring, .core { animation: none; } }
+
+  #log {
+    flex: 1; min-height: 0; overflow-y: auto; padding: 4px 2px;
+    border-top: 1px solid var(--line);
+  }
+  .msg { margin: 8px 0; padding: 6px 10px; border-left: 2px solid var(--line); font-size: .88rem; line-height: 1.5; overflow-wrap: anywhere; }
+  .msg.ai { border-left-color: var(--cyan); background: linear-gradient(90deg, rgba(79,216,255,.08), transparent); }
+  .tag { display: block; font-size: .62rem; letter-spacing: .2em; color: var(--muted); margin-bottom: 2px; }
+  .msg a { color: var(--cyan); margin-left: 8px; }
+
+  .chips { display: flex; gap: 8px; overflow-x: auto; padding: 10px 0; scrollbar-width: none; }
+  .chips::-webkit-scrollbar { display: none; }
+  .chip {
+    flex: none; font: inherit; font-size: .75rem; color: var(--text); background: var(--panel);
+    border: 1px solid var(--line); border-radius: 999px; padding: 7px 12px; cursor: pointer;
+  }
+  .chip:active { border-color: var(--cyan); }
+
+  form { display: flex; gap: 8px; }
+  #input {
+    flex: 1; min-width: 0; font: inherit; font-size: 16px; color: var(--text);
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px;
+  }
+  #input::placeholder { color: var(--muted); }
+  #input:focus { outline: none; border-color: var(--cyan); }
+  #send {
+    font: inherit; font-size: .8rem; letter-spacing: .12em; color: var(--bg); background: var(--cyan);
+    border: 0; border-radius: 10px; padding: 0 16px; cursor: pointer;
+  }
+</style>
+</head>
+<body>
+  <header>
+    <h1>J.A.R.V.I.S</h1>
+    <span id="status">STANDBY</span>
+  </header>
+
+  <div class="stage">
+    <button class="reactor" id="reactor" data-state="idle" aria-label="Tap to speak to Jarvis">
+      <span class="ring r1"></span><span class="ring r2"></span><span class="ring r3"></span><span class="core"></span>
+    </button>
+  </div>
+
+  <div id="log" aria-live="polite"></div>
+
+  <div class="chips" id="chips">
+    <button class="chip" type="button">What time is it</button>
+    <button class="chip" type="button">Tell me a joke</button>
+    <button class="chip" type="button">Open YouTube</button>
+    <button class="chip" type="button">Set timer for 1 minute</button>
+    <button class="chip" type="button">What is 25 times 4</button>
+    <button class="chip" type="button">Battery level</button>
+  </div>
+
+  <form id="form" autocomplete="off">
+    <input id="input" type="text" placeholder="Type a command" aria-label="Type a command">
+    <button id="send" type="submit">SEND</button>
+  </form>
+
+<script>
+(function () {
+  var $ = function (s) { return document.querySelector(s); };
+  var log = $('#log'), reactor = $('#reactor'), statusEl = $('#status');
+  var LABELS = { idle: 'STANDBY', listening: 'LISTENING', thinking: 'PROCESSING', speaking: 'SPEAKING' };
+
+  function setState(s) { reactor.dataset.state = s; statusEl.textContent = LABELS[s]; }
+
+  function add(who, text, link) {
+    var d = document.createElement('div');
+    d.className = 'msg ' + who;
+    var tag = document.createElement('span');
+    tag.className = 'tag';
+    tag.textContent = who === 'me' ? 'YOU' : 'JARVIS';
+    var body = document.createElement('span');
+    body.textContent = text;
+    d.appendChild(tag);
+    d.appendChild(body);
+    if (link) {
+      var a = document.createElement('a');
+      a.href = link; a.target = '_blank'; a.rel = 'noopener'; a.textContent = 'Open';
+      d.appendChild(a);
+    }
+    log.appendChild(d);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  /* ---------- Speech output ---------- */
+  var voice = null;
+  function pickVoice() {
+    var v = speechSynthesis.getVoices();
+    voice = v.find(function (x) { return /Google UK English Male|Daniel|Arthur|Rishi/i.test(x.name); }) ||
+            v.find(function (x) { return /^en/i.test(x.lang); }) || null;
+  }
+  if ('speechSynthesis' in window) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
+
+  function say(text, link) {
+    add('ai', text, link);
+    if (!('speechSynthesis' in window)) { setState('idle'); return; }
+    speechSynthesis.cancel();
+    var u = new SpeechSynthesisUtterance(text);
+    if (voice) u.voice = voice;
+    u.rate = 1; u.pitch = 0.9;
+    u.onstart = function () { setState('speaking'); };
+    u.onend = u.onerror = function () { setState('idle'); };
+    speechSynthesis.speak(u);
+  }
+
+  function openLink(text, url) {
+    say(text, url);
+    try { window.open(url, '_blank', 'noopener'); } catch (e) {}
+  }
+
+  /* ---------- Speech input ---------- */
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  var rec = null, listening = false;
+  if (SR) {
+    rec = new SR();
+    rec.lang = 'en-IN';
+    rec.interimResults = false;
+    rec.maxAlternatives = 1;
+    rec.onstart = function () { listening = true; setState('listening'); };
+    rec.onresult = function (e) { handle(e.results[0][0].transcript); };
+    rec.onerror = function (e) {
+      listening = false; setState('idle');
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+        say('Microphone access is blocked. Allow it in your browser settings, or type your command.');
+      } else if (e.error !== 'no-speech' && e.error !== 'aborted') {
+        say('I could not hear that. Try again, or type.');
+      }
+    };
+    rec.onend = function () {
+      listening = false;
+      if (reactor.dataset.state === 'listening') setState('idle');
+    };
+  }
+
+  reactor.addEventListener('click', function () {
+    if (!rec) { say('Voice input is not supported in this browser. Try Chrome. You can still type commands.'); return; }
+    if ('speechSynthesis' in window) speechSynthesis.cancel();
+    if (listening) { rec.stop(); return; }
+    try { rec.start(); } catch (e) {}
+  });
+
+  /* ---------- Commands ---------- */
+  var SITES = {
+    youtube: 'https://www.youtube.com', google: 'https://www.google.com', gmail: 'https://mail.google.com',
+    maps: 'https://maps.google.com', whatsapp: 'https://web.whatsapp.com', instagram: 'https://www.instagram.com',
+    wikipedia: 'https://www.wikipedia.org', spotify: 'https://open.spotify.com', netflix: 'https://www.netflix.com',
+    github: 'https://github.com', twitter: 'https://x.com', facebook: 'https://www.facebook.com'
+  };
+  var JOKES = [
+    'Why do programmers prefer dark mode? Because light attracts bugs.',
+    'I would tell you a UDP joke, but you might not get it.',
+    'There are ten kinds of people. Those who understand binary, and those who do not.',
+    'Why did the developer go broke? He used up all his cache.',
+    'A SQL query walks into a bar, walks up to two tables and asks, may I join you?',
+    'My code worked first try. I am still looking for what I broke.'
+  ];
+
+  function handle(raw) {
+    var text = String(raw).trim();
+    if (!text) return;
+    add('me', text);
+    setState('thinking');
+    var q = text.toLowerCase().replace(/^(hey |ok |okay )?jarvis[, ]*/, '').replace(/[?.!]+$/, '').trim();
+    setTimeout(function () { respond(q); }, 250);
+  }
+
+  function respond(q) {
+    var m;
+
+    // Timer
+    m = q.match(/timer (?:for )?(\d+(?:\.\d+)?)\s*(second|sec|minute|min|hour)/);
+    if (m) {
+      var n = parseFloat(m[1]), u = m[2].charAt(0);
+      var ms = n * (u === 's' ? 1000 : u === 'm' ? 60000 : 3600000);
+      var label = { s: 'second', m: 'minute', h: 'hour' }[u];
+      setTimeout(function () { say('Your ' + n + ' ' + label + (n === 1 ? '' : 's') + ' timer is done.'); }, ms);
+      say('Timer set for ' + n + ' ' + label + (n === 1 ? '' : 's') + '. Keep this page open.');
+      return;
+    }
+
+    // Math
+    var mq = q.replace(/^(what is|what's|calculate|compute|solve|how much is)\s+/, '');
+    var expr = mq.replace(/multiplied by|times/g, '*').replace(/divided by|over/g, '/')
+                 .replace(/plus/g, '+').replace(/minus/g, '-').replace(/to the power of/g, '**')
+                 .replace(/\bx\b/g, '*').replace(/,/g, '');
+    if (/\d/.test(expr) && /^[\d\s+\-*/().%]+$/.test(expr)) {
+      try {
+        var r = Function('"use strict";return (' + expr + ')')();
+        if (isFinite(r)) { say('That is ' + parseFloat(r.toFixed(6)) + '.'); return; }
+      } catch (e) {}
+    }
+
+    // Play on YouTube
+    m = q.match(/^play (.+?)(?: on youtube)?$/);
+    if (m) { openLink('Searching YouTube for ' + m[1] + '.', 'https://www.youtube.com/results?search_query=' + encodeURIComponent(m[1])); return; }
+
+    // Open a site
+    m = q.match(/^(?:open|launch|go to)\s+(.+)$/);
+    if (m) {
+      var key = m[1].replace(/\.com$/, '').trim();
+      if (SITES[key]) { openLink('Opening ' + key + '.', SITES[key]); return; }
+    }
+
+    // Web search
+    m = q.match(/^(?:search(?: for)?|google|look up|find)\s+(.+)$/);
+    if (m) { openLink('Searching the web for ' + m[1] + '.', 'https://www.google.com/search?q=' + encodeURIComponent(m[1])); return; }
+
+    // Time, date
+    if (/\btime\b/.test(q)) { say('It is ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) + '.'); return; }
+    if (/\b(date|day|today)\b/.test(q)) {
+      say('Today is ' + new Date().toLocaleDateString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) + '.');
+      return;
+    }
+
+    // Weather (opens a forecast search)
+    if (/weather|forecast|temperature/.test(q)) { openLink('Here is the forecast.', 'https://www.google.com/search?q=weather'); return; }
+
+    // Battery
+    if (/battery/.test(q)) {
+      if (navigator.getBattery) {
+        navigator.getBattery().then(function (b) {
+          say('Battery is at ' + Math.round(b.level * 100) + ' percent' + (b.charging ? ' and charging.' : '.'));
+        });
+      } else { say('This browser does not let me read the battery.'); }
+      return;
+    }
+
+    // Small talk
+    if (/joke|funny/.test(q)) { say(JOKES[Math.floor(Math.random() * JOKES.length)]); return; }
+    if (/who are you|your name/.test(q)) { say('I am Jarvis, your personal assistant. Just a rather clever web page.'); return; }
+    if (/how are you/.test(q)) { say('All systems nominal. How can I help?'); return; }
+    if (/thank/.test(q)) { say('Always at your service.'); return; }
+    if (/^(hello|hi|hey|yo|good (morning|afternoon|evening))/.test(q)) {
+      var h = new Date().getHours();
+      say((h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening') + '. How can I help?');
+      return;
+    }
+    if (/help|what can you do/.test(q)) {
+      say('I can tell the time and date, do maths, set timers, open sites, search the web, play YouTube, check your battery and tell jokes.');
+      return;
+    }
+
+    // Fallback
+    openLink('I do not know that one. Here is a web search instead.', 'https://www.google.com/search?q=' + encodeURIComponent(q));
+  }
+
+  /* ---------- Wiring ---------- */
+  $('#form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var input = $('#input');
+    handle(input.value);
+    input.value = '';
+  });
+  $('#chips').addEventListener('click', function (e) {
+    if (e.target.classList.contains('chip')) handle(e.target.textContent);
+  });
+
+  add('ai', 'Systems online. Tap the reactor to speak, or type a command.');
+})();
+</script>
+</body>
+</html>
